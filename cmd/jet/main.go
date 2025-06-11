@@ -17,6 +17,7 @@ import (
 	postgresgen "github.com/go-jet/jet/v2/generator/postgres"
 	sqlitegen "github.com/go-jet/jet/v2/generator/sqlite"
 	"github.com/go-jet/jet/v2/generator/template"
+	"github.com/go-jet/jet/v2/internal/3rdparty/snaker"
 	"github.com/go-jet/jet/v2/internal/jet"
 	"github.com/go-jet/jet/v2/internal/utils/errfmt"
 	"github.com/go-jet/jet/v2/internal/utils/strslice"
@@ -50,6 +51,8 @@ var (
 	tablePkg string
 	viewPkg  string
 	enumPkg  string
+
+	modelJSONTag string
 )
 
 func init() {
@@ -84,6 +87,7 @@ func init() {
 	flag.StringVar(&tablePkg, "rel-table-path", "table", "Relative path for the Table files package from the destination directory.")
 	flag.StringVar(&viewPkg, "rel-view-path", "view", "Relative path for the View files package from the destination directory.")
 	flag.StringVar(&enumPkg, "rel-enum-path", "enum", "Relative path for the Enum files package from the destination directory.")
+	flag.StringVar(&modelJSONTag, "model-json-tag", "none", `Specifies the JSON tag style for model fields. Options: 'none', 'snake-case', 'camel-case', 'pascal-case'.`)
 }
 
 func main() {
@@ -184,7 +188,7 @@ func usage() {
 		"path",
 		"ignore-tables", "ignore-views", "ignore-enums",
 		"skip-model", "skip-sql-builder",
-		"rel-model-path", "rel-table-path", "rel-view-path", "rel-enum-path",
+		"rel-model-path", "rel-table-path", "rel-view-path", "rel-enum-path", "model-json-tag",
 	}
 
 	for _, name := range order {
@@ -245,6 +249,19 @@ func parseList(list string) []string {
 	return ret
 }
 
+func getJSONTag(columnName string) string {
+	switch modelJSONTag {
+	case "camel-case":
+		return fmt.Sprintf(`json:"%s"`, snaker.SnakeToCamel(columnName, false))
+	case "pascal-case":
+		return fmt.Sprintf(`json:"%s"`, snaker.SnakeToCamel(columnName, true))
+	case "snake-case":
+		return fmt.Sprintf(`json:"%s"`, columnName)
+	default:
+		return fmt.Sprintf(`json:"%s"`, columnName)
+	}
+}
+
 func genTemplate(dialect jet.Dialect, ignoreTables []string, ignoreViews []string, ignoreEnums []string) template.Template {
 
 	shouldSkipTable := func(table metadata.Table) bool {
@@ -267,7 +284,19 @@ func genTemplate(dialect jet.Dialect, ignoreTables []string, ignoreViews []strin
 						if shouldSkipTable(table) {
 							return template.TableModel{Skip: true}
 						}
-						return template.DefaultTableModel(table)
+						// If modelJSONTag is "none", we return the default table model without any JSON tags.
+						if modelJSONTag == "none" {
+							return template.DefaultTableModel(table)
+						}
+
+						// If modelJSONTag is "snake-case", "camel-case", or "pascal-case",
+						// we return the default table model with JSON tags formatted accordingly.
+						return template.DefaultTableModel(table).UseField(func(columnMetaData metadata.Column) template.TableModelField {
+							defaultTableModelField := template.DefaultTableModelField(columnMetaData)
+							return defaultTableModelField.UseTags(
+								getJSONTag(columnMetaData.Name),
+							)
+						})
 					}).
 					UseView(func(view metadata.Table) template.ViewModel {
 						if shouldSkipView(view) {
